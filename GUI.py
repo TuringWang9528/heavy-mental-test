@@ -295,93 +295,102 @@ if model:
             except Exception as e:
                 st.error(f"Error processing file: {e}")
         st.markdown('</div>', unsafe_allow_html=True)
-# ======================= TAB 4: 双变量交互热力图 (新功能) =======================
+        
+# ======================= TAB 4: 双变量交互热力图 (修复与双重保险版) =======================
     with tab4:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 🧊 2D Feature Interaction Analysis")
-        st.info("Select two features to see how their combination affects the Adsorption Capacity (Qe).")
-
-        # 1. 选择两个不同的特征
+        
         col_inter1, col_inter2 = st.columns(2)
         with col_inter1:
             feat_x = st.selectbox("Select X-axis Feature", feature_names, index=0, key="inter_x")
         with col_inter2:
-            # 默认选第2个特征，避免与X重复
+            # 默认选第2个特征
             feat_y = st.selectbox("Select Y-axis Feature", feature_names, index=1, key="inter_y")
 
-        # 2. 分辨率设置
-        res_inter = st.slider("Heatmap Resolution", 10, 50, 20, help="Higher resolution is smoother but slower.")
+        res_inter = st.slider("Resolution", 10, 50, 20, key="inter_res")
 
-        if st.button("Generate Heatmap", type="primary"):
+        if st.button("Generate Heatmap", type="primary", key="inter_btn"):
             try:
                 if feat_x == feat_y:
-                    st.warning("Please select two different features.")
+                    st.warning("⚠️ Please select two different features.")
                     st.stop()
 
-                # --- A. 准备基准数据 ---
+                # --- 1. 数据准备 ---
                 base_input_dict = {}
                 for idx, name in enumerate(feature_names):
                     base_input_dict[name] = st.session_state.get(f"input_{idx}", feature_ranges[name]["default"])
                 
-                # --- B. 生成网格数据 (Meshgrid) ---
-                # 获取两个特征的范围
                 x_min, x_max = feature_ranges[feat_x]["min"], feature_ranges[feat_x]["max"]
                 y_min, y_max = feature_ranges[feat_y]["min"], feature_ranges[feat_y]["max"]
                 
                 x_linspace = np.linspace(x_min, x_max, res_inter)
                 y_linspace = np.linspace(y_min, y_max, res_inter)
                 
-                # 生成网格
                 X_grid, Y_grid = np.meshgrid(x_linspace, y_linspace)
+                X_flat, Y_flat = X_grid.ravel(), Y_grid.ravel()
                 
-                # 展平网格以构建 DataFrame
-                X_flat = X_grid.ravel()
-                Y_flat = Y_grid.ravel()
-                
-                # 创建批量预测 DataFrame (复制基准行 N*N 次)
-                total_points = res_inter * res_inter
-                batch_df = pd.DataFrame([base_input_dict] * total_points)
-                batch_df = batch_df[feature_names] # 确保列序
-
-                # 填入变化的 X 和 Y
+                batch_df = pd.DataFrame([base_input_dict] * (res_inter * res_inter))
+                batch_df = batch_df[feature_names]
                 batch_df[feat_x] = X_flat
                 batch_df[feat_y] = Y_flat
                 
-                # --- C. 预测 ---
+                # --- 2. 预测 ---
                 Z_pred = model.predict(batch_df)
-                
-                # --- D. 重塑为网格形状用于绘图 ---
                 Z_grid = Z_pred.reshape(res_inter, res_inter)
 
-                # --- E. 绘制等高线热力图 (Plotly) ---
+                # --- 3. 诊断：检查数据差异性 ---
+                z_min, z_max = np.min(Z_grid), np.max(Z_grid)
+                if z_min == z_max:
+                    st.warning(f"⚠️ 警告：在选定的范围内，预测结果没有任何变化 (Constant Value: {z_min:.4f})。热力图将显示为单一颜色。")
+
+                # --- 4. 方案 A: Plotly Contour (交互式) ---
+                st.subheader("Interactive Contour Plot")
+                
+                # 强制转为 list，防止序列化问题
                 fig_contour = go.Figure(data=go.Contour(
-                    z=Z_grid,
-                    x=x_linspace,
-                    y=y_linspace,
-                    colorscale='Viridis', # 专业的科研配色
-                    contours=dict(
-                        start=np.min(Z_grid),
-                        end=np.max(Z_grid),
-                        size=(np.max(Z_grid) - np.min(Z_grid)) / 15, # 自动计算等高线密度
-                        showlabels=True, # 显示数值标签
-                        labelfont=dict(size=12, color='white')
-                    ),
-                    colorbar=dict(title='Qe (mg/g)')
+                    z=Z_grid.tolist(),
+                    x=x_linspace.tolist(),
+                    y=y_linspace.tolist(),
+                    colorscale='Viridis',
+                    # 移除手动 contours 设置，让 Plotly 自动处理，防止除以0错误
+                    colorbar=dict(title='Qe (mg/g)'),
+                    contours=dict(coloring='heatmap', showlabels=True) # 混合模式，更稳健
                 ))
 
                 fig_contour.update_layout(
-                    title=f"Interaction between <b>{feat_x}</b> and <b>{feat_y}</b>",
+                    title=f"Interaction: {feat_x} vs {feat_y}",
                     xaxis_title=feat_x,
                     yaxis_title=feat_y,
-                    height=600,
+                    height=550,
                     plot_bgcolor='white'
                 )
                 
                 st.plotly_chart(fig_contour, use_container_width=True, theme=None)
+
+                # --- 5. 方案 B: Matplotlib Heatmap (静态图备份) ---
+                # 如果上面不显示，这个作为保底
+                st.subheader("Static Heatmap (Matplotlib Backup)")
+                fig_mpl, ax = plt.subplots(figsize=(8, 6))
                 
-                st.success(f"Analysis: Max Qe ({np.max(Z_pred):.2f}) is achieved when {feat_x}≈{X_flat[np.argmax(Z_pred)]:.2f} and {feat_y}≈{Y_flat[np.argmax(Z_pred)]:.2f}")
+                # 使用 contourf 填充颜色
+                cp = ax.contourf(X_grid, Y_grid, Z_grid, cmap='viridis', levels=20)
+                fig_mpl.colorbar(cp, label='Predicted Qe (mg/g)')
+                
+                ax.set_title(f"Interaction: {feat_x} vs {feat_y}")
+                ax.set_xlabel(feat_x)
+                ax.set_ylabel(feat_y)
+                
+                st.pyplot(fig_mpl)
+
+                # 显示极值点
+                max_idx = np.argmax(Z_pred)
+                st.success(f"Analysis Result: Max Qe ({Z_pred[max_idx]:.2f}) found at {feat_x}={X_flat[max_idx]:.2f}, {feat_y}={Y_flat[max_idx]:.2f}")
 
             except Exception as e:
-                st.error(f"Error: {str(e)}")
+                st.error(f"Calculation Error: {str(e)}")
+                # 打印详细错误以便调试
+                import traceback
+                st.text(traceback.format_exc())
         
         st.markdown('</div>', unsafe_allow_html=True)
