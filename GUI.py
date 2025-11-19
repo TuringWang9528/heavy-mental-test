@@ -563,7 +563,7 @@ if model:
                 fig_imp.update_layout(
                     title="Feature Importance Ranking (XGBoost)",
                     xaxis_title="Relative Importance (Gain)",
-                    yaxis_title="Feature",
+                    # yaxis_title="Feature",
                     height=600,
                     plot_bgcolor='white',
                     margin=dict(l=150) # 给左边留足空间显示特征名
