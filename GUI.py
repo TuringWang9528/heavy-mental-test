@@ -369,32 +369,32 @@ if model:
                 
                 st.plotly_chart(fig_contour, use_container_width=True, theme=None)
 
-            #     # --- 5. 方案 B: Matplotlib Heatmap (静态图备份) ---
-            #     # 如果上面不显示，这个作为保底
-            #     st.subheader("Static Heatmap (Matplotlib Backup)")
-            #     fig_mpl, ax = plt.subplots(figsize=(8, 6))
+                # --- 5. 方案 B: Matplotlib Heatmap (静态图备份) ---
+                # 如果上面不显示，这个作为保底
+                st.subheader("Static Heatmap (Matplotlib Backup)")
+                fig_mpl, ax = plt.subplots(figsize=(8, 6))
                 
-            #     # 使用 contourf 填充颜色
-            #     cp = ax.contourf(X_grid, Y_grid, Z_grid, cmap='viridis', levels=20)
-            #     fig_mpl.colorbar(cp, label='Predicted Qe (mg/g)')
+                # 使用 contourf 填充颜色
+                cp = ax.contourf(X_grid, Y_grid, Z_grid, cmap='viridis', levels=20)
+                fig_mpl.colorbar(cp, label='Predicted Qe (mg/g)')
                 
-            #     ax.set_title(f"Interaction: {feat_x} vs {feat_y}")
-            #     ax.set_xlabel(feat_x)
-            #     ax.set_ylabel(feat_y)
+                ax.set_title(f"Interaction: {feat_x} vs {feat_y}")
+                ax.set_xlabel(feat_x)
+                ax.set_ylabel(feat_y)
                 
-            #     st.pyplot(fig_mpl)
+                st.pyplot(fig_mpl)
 
-            #     # 显示极值点
-            #     max_idx = np.argmax(Z_pred)
-            #     st.success(f"Analysis Result: Max Qe ({Z_pred[max_idx]:.2f}) found at {feat_x}={X_flat[max_idx]:.2f}, {feat_y}={Y_flat[max_idx]:.2f}")
+                # 显示极值点
+                max_idx = np.argmax(Z_pred)
+                st.success(f"Analysis Result: Max Qe ({Z_pred[max_idx]:.2f}) found at {feat_x}={X_flat[max_idx]:.2f}, {feat_y}={Y_flat[max_idx]:.2f}")
 
-            # except Exception as e:
-            #     st.error(f"Calculation Error: {str(e)}")
-            #     # 打印详细错误以便调试
-            #     import traceback
-            #     st.text(traceback.format_exc())
+            except Exception as e:
+                st.error(f"Calculation Error: {str(e)}")
+                # 打印详细错误以便调试
+                import traceback
+                st.text(traceback.format_exc())
         
-        # st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # ======================= TAB 5: 逆向优化 (修复显示版) =======================
     with tab5:
