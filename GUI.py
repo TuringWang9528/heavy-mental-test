@@ -164,41 +164,84 @@ if model:
                 shap_df["Abs"] = shap_df["SHAP Value"].abs()
                 st.dataframe(shap_df.sort_values("Abs", ascending=False).drop("Abs", axis=1), height=400)
 
-    # ======================= TAB 2: 灵敏度分析 (新功能) =======================
+# ======================= TAB 2: 灵敏度分析 (深度修复版) =======================
     with tab2:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 📈 Single Feature Sensitivity Analysis")
-        st.write("Analyze how the prediction changes when you vary one feature while keeping others constant.")
         
-        col_sel1, col_sel2 = st.columns(2)
+        col_sel1, col_sel2 = st.columns([2, 1])
         with col_sel1:
-            target_feature = st.selectbox("Select Feature to Analyze", feature_names)
+            target_feature = st.selectbox("Select Feature", feature_names)
         with col_sel2:
-            points = st.slider("Resolution (Number of points)", 10, 200, 50)
+            points = st.slider("Resolution", 10, 100, 40)
+
+        # 改回按钮触发，因为这更符合你的习惯，且我们要排查是不是按钮逻辑的问题
+        if st.button("Run Sensitivity Analysis", type="primary"):
+            try:
+                # --- 1. 准备输入数据 ---
+                # 获取当前所有特征的默认值/输入值
+                base_input_dict = {}
+                for idx, name in enumerate(feature_names):
+                    # 尝试从 session 获取，获取不到就用默认值
+                    base_input_dict[name] = st.session_state.get(f"input_{idx}", feature_ranges[name]["default"])
+                
+                # 构造基础 DataFrame
+                temp_df = pd.DataFrame([base_input_dict] * points)
+                
+                # 确保列顺序与训练时一致
+                temp_df = temp_df[feature_names]
+
+                # --- 2. 修改目标特征列 ---
+                min_val = feature_ranges[target_feature]["min"]
+                max_val = feature_ranges[target_feature]["max"]
+                x_values = np.linspace(min_val, max_val, points)
+                temp_df[target_feature] = x_values
+
+                # --- 3. 预测 (关键步骤) ---
+                y_pred = model.predict(temp_df)
+                
+                # 【诊断步骤 A】强制扁平化数据，防止 (N,1) 维度问题
+                y_pred = y_pred.ravel() 
+                
+                # 【诊断步骤 B】检查是否有 NaN (空值)
+                if np.isnan(y_pred).any():
+                    st.error("⚠️ 错误：模型预测结果包含无效值 (NaN)。请检查输入特征范围是否合理。")
+                    st.write("前5个预测值:", y_pred[:5])
+                else:
+                    # --- 4. 构建专门用于画图的 DataFrame ---
+                    # Plotly 最喜欢这种格式，最不容易出错
+                    plot_df = pd.DataFrame({
+                        "x_axis": x_values,
+                        "y_axis": y_pred
+                    })
+
+                    # --- 5. 打印数据预览 (Debug) ---
+                    # 如果图还没出来，看这里有没有数字！
+                    with st.expander("查看底层数据 (Debug Data)", expanded=False):
+                        st.write(f"正在绘制 {target_feature} 的曲线，数据前5行：")
+                        st.dataframe(plot_df.head())
+
+                    # --- 6. 绘图 ---
+                    fig = px.line(
+                        plot_df, 
+                        x="x_axis", 
+                        y="y_axis", 
+                        title=f"Sensitivity: {target_feature}",
+                        labels={"x_axis": target_feature, "y_axis": "Predicted Qe (mg/g)"}
+                    )
+                    
+                    # 强制设置线条颜色和粗细，防止“隐形”
+                    fig.update_traces(line=dict(color='#3498db', width=4), mode='lines+markers')
+                    
+                    # 设置背景色，防止白线画在白底上
+                    fig.update_layout(plot_bgcolor='#f4f4f4', height=450)
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+
+            except Exception as e:
+                st.error(f"运行出错: {str(e)}")
+                st.write("详情:", e)
         
-        if st.button("Run Analysis"):
-            # 1. 获取当前输入值作为基准
-            current_input_vector = [st.session_state.get(f"input_{i}", feature_ranges[n]["default"]) for i, n in enumerate(feature_names)]
-            base_df = pd.DataFrame([current_input_vector], columns=feature_names)
-            
-            # 2. 生成变化范围
-            min_val = feature_ranges[target_feature]["min"]
-            max_val = feature_ranges[target_feature]["max"]
-            x_values = np.linspace(min_val, max_val, points)
-            
-            # 3. 构建批量预测数据
-            temp_df = pd.concat([base_df]*points, ignore_index=True)
-            temp_df[target_feature] = x_values
-            
-            # 4. 预测
-            y_pred_analysis = model.predict(temp_df)
-            
-            # 5. Plotly 交互式绘图
-            fig_line = px.line(x=x_values, y=y_pred_analysis, labels={'x': target_feature, 'y': 'Predicted Qe (mg/g)'})
-            fig_line.update_layout(title=f"Effect of {target_feature} on Adsorption Capacity", plot_bgcolor='white')
-            fig_line.update_traces(line_color='#3498db', line_width=3)
-            st.plotly_chart(fig_line, use_container_width=True)
-            
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ======================= TAB 3: 批量预测 (新功能) =======================
