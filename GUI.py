@@ -369,34 +369,34 @@ if model:
                 
                 st.plotly_chart(fig_contour, use_container_width=True, theme=None)
 
-                # --- 5. 方案 B: Matplotlib Heatmap (静态图备份) ---
-                # 如果上面不显示，这个作为保底
-                st.subheader("Static Heatmap (Matplotlib Backup)")
-                fig_mpl, ax = plt.subplots(figsize=(8, 6))
+            #     # --- 5. 方案 B: Matplotlib Heatmap (静态图备份) ---
+            #     # 如果上面不显示，这个作为保底
+            #     st.subheader("Static Heatmap (Matplotlib Backup)")
+            #     fig_mpl, ax = plt.subplots(figsize=(8, 6))
                 
-                # 使用 contourf 填充颜色
-                cp = ax.contourf(X_grid, Y_grid, Z_grid, cmap='viridis', levels=20)
-                fig_mpl.colorbar(cp, label='Predicted Qe (mg/g)')
+            #     # 使用 contourf 填充颜色
+            #     cp = ax.contourf(X_grid, Y_grid, Z_grid, cmap='viridis', levels=20)
+            #     fig_mpl.colorbar(cp, label='Predicted Qe (mg/g)')
                 
-                ax.set_title(f"Interaction: {feat_x} vs {feat_y}")
-                ax.set_xlabel(feat_x)
-                ax.set_ylabel(feat_y)
+            #     ax.set_title(f"Interaction: {feat_x} vs {feat_y}")
+            #     ax.set_xlabel(feat_x)
+            #     ax.set_ylabel(feat_y)
                 
-                st.pyplot(fig_mpl)
+            #     st.pyplot(fig_mpl)
 
-                # 显示极值点
-                max_idx = np.argmax(Z_pred)
-                st.success(f"Analysis Result: Max Qe ({Z_pred[max_idx]:.2f}) found at {feat_x}={X_flat[max_idx]:.2f}, {feat_y}={Y_flat[max_idx]:.2f}")
+            #     # 显示极值点
+            #     max_idx = np.argmax(Z_pred)
+            #     st.success(f"Analysis Result: Max Qe ({Z_pred[max_idx]:.2f}) found at {feat_x}={X_flat[max_idx]:.2f}, {feat_y}={Y_flat[max_idx]:.2f}")
 
-            except Exception as e:
-                st.error(f"Calculation Error: {str(e)}")
-                # 打印详细错误以便调试
-                import traceback
-                st.text(traceback.format_exc())
+            # except Exception as e:
+            #     st.error(f"Calculation Error: {str(e)}")
+            #     # 打印详细错误以便调试
+            #     import traceback
+            #     st.text(traceback.format_exc())
         
         st.markdown('</div>', unsafe_allow_html=True)
 
-# ======================= TAB 5: 逆向优化 (科研神器) =======================
+# ======================= TAB 5: 逆向优化 (修复显示版) =======================
     with tab5:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 🎯 Inverse Optimization (Target Search)")
@@ -405,24 +405,17 @@ if model:
         col_opt1, col_opt2 = st.columns([1, 2])
         
         with col_opt1:
-            # 1. 设定目标
             target_qe = st.number_input("Target Qe (mg/g)", min_value=0.0, value=100.0, step=10.0)
-            
-            # 2. 设定搜索次数
-            n_iter = st.slider("Search Iterations (Monte Carlo)", 1000, 50000, 10000, help="模拟的实验次数，越多越准，但速度越慢。")
+            n_iter = st.slider("Search Iterations (Monte Carlo)", 1000, 50000, 10000)
 
         with col_opt2:
-            # 3. 选择可调整的参数 (最重要的步骤)
-            st.write("**Select Optimization Parameters:** (Unselected features will be fixed at current values)")
-            
-            # 默认选中几个常见的操作变量
+            st.write("**Select Optimization Parameters:**")
             default_opts = ['pH of Biochar', 'Initial Cd concentration (mg/L)', 'Adsorption temperature(℃)']
-            # 过滤一下防止报错
+            # 过滤掉不存在的特征
             default_opts = [x for x in default_opts if x in feature_names]
-            
             opt_features = st.multiselect("Features to Optimize", feature_names, default=default_opts)
 
-        if st.button("🚀 Start Optimization", type="primary"):
+        if st.button("🚀 Start Optimization", type="primary", key="opt_btn"):
             if not opt_features:
                 st.warning("Please select at least one feature to optimize.")
                 st.stop()
@@ -431,33 +424,23 @@ if model:
             status_text = st.empty()
             
             try:
-                # --- A. 准备基准数据 (固定不动的特征) ---
+                # --- A. 准备基准数据 ---
                 base_input_dict = {}
-                for name in feature_names:
-                    base_input_dict[name] = st.session_state.get(f"input_{feature_names.index(name)}", feature_ranges[name]["default"])
+                for idx, name in enumerate(feature_names):
+                    base_input_dict[name] = st.session_state.get(f"input_{idx}", feature_ranges[name]["default"])
                 
-                # --- B. 生成随机搜索空间 (Monte Carlo) ---
+                # --- B. 生成随机搜索空间 ---
                 status_text.text(f"Simulating {n_iter} experiments...")
-                
-                # 创建一个空的 DataFrame 框架
                 random_data = {}
-                
-                # 对于每一个特征
                 for name in feature_names:
                     if name in opt_features:
-                        # 如果是优化对象，则在 min-max 之间随机生成
                         min_v = feature_ranges[name]["min"]
                         max_v = feature_ranges[name]["max"]
-                        # 使用均匀分布生成 n_iter 个点
                         random_data[name] = np.random.uniform(min_v, max_v, n_iter)
                     else:
-                        # 如果不是优化对象，保持固定值
                         random_data[name] = np.full(n_iter, base_input_dict[name])
                 
-                # 转为 DataFrame
-                sim_df = pd.DataFrame(random_data)
-                # 确保列顺序正确
-                sim_df = sim_df[feature_names]
+                sim_df = pd.DataFrame(random_data)[feature_names] # 确保列序
                 
                 progress_bar.progress(50)
                 status_text.text("Running AI Model...")
@@ -469,11 +452,8 @@ if model:
                 progress_bar.progress(80)
                 status_text.text("Filtering results...")
 
-                # --- D. 筛选符合目标的结果 ---
-                # 筛选出大于目标的
+                # --- D. 筛选结果 ---
                 success_df = sim_df[sim_df['Predicted Qe'] >= target_qe].copy()
-                
-                # 按预测值从大到小排序
                 success_df = success_df.sort_values(by='Predicted Qe', ascending=False)
                 
                 progress_bar.progress(100)
@@ -484,7 +464,6 @@ if model:
                     st.success(f"🎉 Found {len(success_df)} conditions that meet the target (Qe >= {target_qe})!")
                     
                     st.write("### 🏆 Top 5 Recommended Conditions")
-                    # 格式化显示，只保留优化特征和预测结果，不然列太多看花了
                     display_cols = ['Predicted Qe'] + opt_features
                     st.dataframe(success_df[display_cols].head(5).style.format("{:.2f}").background_gradient(cmap='Blues'))
                     
@@ -492,20 +471,47 @@ if model:
                     csv_opt = success_df.to_csv(index=False).encode('utf-8')
                     st.download_button("📥 Download All Valid Solutions", csv_opt, "optimization_results.csv", "text/csv")
                     
-                    # 可视化分布 (可选)
-                    with st.expander("📊 Solution Distribution Analysis"):
-                        # 画一个直方图看优化参数的分布
+                    # --- F. 可视化分布 (修复显示问题) ---
+                    with st.expander("📊 Solution Distribution Analysis", expanded=True):
+                        st.write(f"Distribution of top 100 solutions for targeted features:")
+                        
+                        # 取前100个最佳结果做直方图
+                        top_100_df = success_df.head(100)
+                        
                         for col in opt_features:
-                            fig_hist = px.histogram(success_df.head(100), x=col, nbins=20, title=f"Distribution of {col} in Top Solutions")
-                            fig_hist.update_layout(height=300, margin=dict(t=30,b=10))
-                            st.plotly_chart(fig_hist, use_container_width=True)
+                            # 【核心修复】
+                            # 1. 强制转换为 list，防止 numpy 序列化问题
+                            hist_data = top_100_df[col].tolist()
+                            
+                            # 2. 使用 go.Histogram 替代 px.histogram，控制力更强
+                            fig_hist = go.Figure(data=[go.Histogram(
+                                x=hist_data,
+                                nbinsx=20, # 自动分箱
+                                marker_color='#3498db', # 强制蓝色
+                                marker_line_color='white', # 柱子边框白色
+                                marker_line_width=1,
+                                opacity=0.75
+                            )])
+                            
+                            # 3. 强制背景色和布局
+                            fig_hist.update_layout(
+                                title=f"Distribution of <b>{col}</b> in Top Solutions",
+                                xaxis_title=col,
+                                yaxis_title="Count",
+                                height=350,
+                                plot_bgcolor='white', # 强制白底
+                                margin=dict(l=20, r=20, t=40, b=20),
+                                bargap=0.1 # 柱子间距
+                            )
+                            fig_hist.update_xaxes(showgrid=True, gridcolor='#eee')
+                            fig_hist.update_yaxes(showgrid=True, gridcolor='#eee')
+                            
+                            # 4. theme=None 禁止 Streamlit 覆盖样式
+                            st.plotly_chart(fig_hist, use_container_width=True, theme=None)
                             
                 else:
-                    st.error(f"❌ No solutions found for Qe >= {target_qe} within current ranges.")
-                    st.write("Suggestion: Try lowering the target value or optimizing more features.")
-                    # 展示最接近的结果
-                    best_attempt = sim_df['Predicted Qe'].max()
-                    st.info(f"The best result found was Qe = {best_attempt:.2f}")
+                    st.error(f"❌ No solutions found for Qe >= {target_qe}.")
+                    st.info(f"Best result found: Qe = {sim_df['Predicted Qe'].max():.2f}")
 
             except Exception as e:
                 st.error(f"Optimization Error: {str(e)}")
