@@ -62,7 +62,7 @@ feature_names = list(feature_ranges.keys())
 if model:
     # 使用 Tabs 分隔功能，使界面更清晰
     # 修改这行代码
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🧪 Single Prediction", "📈 Sensitivity Analysis", "📂 Batch Prediction", "🧊 Interaction Analysis", "🎯 Inverse Optimization", "📊 Global Importance"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🧪 Single Prediction", "📈 Dependency Analysis", "📂 Batch Prediction", "🧊 Interaction Analysis", "🎯 Inverse Optimization", "📊 Global Importance"])
 
     # ======================= TAB 1: 单次预测 (原有功能增强) =======================
     with tab1:
@@ -168,7 +168,7 @@ if model:
 # ======================= TAB 2: 灵敏度分析 (最终完善版) =======================
     with tab2:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown("### 📈 Single Feature Sensitivity Analysis")
+        st.markdown("### 📈 Single Feature Dependency Analysis")
         
         # 1. 选择分析的特征
         target_feature = st.selectbox("Select Feature to Analyze", feature_names, key="sa_feature_select")
