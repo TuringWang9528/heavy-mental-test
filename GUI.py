@@ -613,7 +613,7 @@ if model:
                 # --- 5. 结论与下载 ---
                 # 获取最重要的特征 (最后一行)
                 top_feature = perm_df.iloc[-1]['Feature']
-                st.success(f"💡 结果解读: **{top_feature}** 是对模型预测结果影响最大的特征。")
+                st.success(f"💡 Result interpretation: **{top_feature}** is the feature that has the greatest impact on the model's prediction results.")
                 
                 # 下载数据
                 csv_imp = perm_df.sort_values(by='Importance', ascending=False).to_csv(index=False).encode('utf-8')
