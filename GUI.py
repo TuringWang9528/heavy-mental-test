@@ -519,20 +519,19 @@ if model:
         
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # ======================= TAB 6: 置换特征重要性 (更能反映真实影响) =======================
+# ======================= TAB 6: 置换特征重要性 (Matplotlib 版) =======================
     with tab6:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 📊 Permutation Feature Importance")
         st.info("Shuffle the data of a certain feature and observe how much the prediction results change. The greater the change, the more important the feature is.")
         
-        n_samples = st.slider("Simulation Samples", 500, 5000, 1000, help="样本越多，计算结果越稳定")
+        n_samples = st.slider("Simulation Samples", 500, 5000, 1000)
 
         if st.button("Calculate Permutation Importance", type="primary", key="perm_imp_btn"):
             progress_bar = st.progress(0)
             
             try:
-                # --- 1. 生成虚拟的基准数据集 ---
-                # 因为我们没有原始训练数据，这里生成一批覆盖全范围的样本来模拟
+                # --- 1. 生成虚拟基准数据 ---
                 base_data = {}
                 for name in feature_names:
                     min_v = feature_ranges[name]["min"]
@@ -540,8 +539,6 @@ if model:
                     base_data[name] = np.random.uniform(min_v, max_v, n_samples)
                 
                 X_base = pd.DataFrame(base_data)[feature_names]
-                
-                # 基准预测
                 y_base = model.predict(X_base)
                 
                 progress_bar.progress(20)
@@ -550,23 +547,17 @@ if model:
                 importances = []
                 
                 for i, col in enumerate(feature_names):
-                    # 复制一份数据
                     X_shuffled = X_base.copy()
-                    
-                    # 【核心步骤】打乱当前这一列
-                    # 我们把这一列的数据随机重排，破坏它和结果的对应关系
+                    # 打乱这一列
                     X_shuffled[col] = np.random.permutation(X_shuffled[col].values)
                     
-                    # 重新预测
                     y_shuffled = model.predict(X_shuffled)
                     
-                    # 计算变化量 (使用平均绝对误差 MAE 来衡量影响)
-                    # 意思就是：因为打乱了这个特征，预测结果平均偏离了多少 mg/g
+                    # 计算平均绝对误差 (MAE)
                     diff = np.mean(np.abs(y_base - y_shuffled))
-                    
                     importances.append(diff)
                     
-                    # 更新进度条
+                    # 进度条
                     prog = 20 + int((i / len(feature_names)) * 80)
                     progress_bar.progress(prog)
                 
@@ -575,53 +566,60 @@ if model:
                 # --- 3. 整理数据 ---
                 perm_df = pd.DataFrame({
                     'Feature': feature_names,
-                    'Importance (Impact on Qe)': importances
+                    'Importance': importances
                 })
                 
-                # 排序
-                perm_df = perm_df.sort_values(by='Importance (Impact on Qe)', ascending=True)
+                # 排序：Matplotlib barh 是从下往上画的，所以我们按升序排，最重要的就在最上面
+                perm_df = perm_df.sort_values(by='Importance', ascending=True)
                 
-                # --- 4. 绘图 (Plotly) ---
-                # 转为 list 防止显示问题
-                y_feat = perm_df['Feature'].tolist()
-                x_imp = perm_df['Importance (Impact on Qe)'].tolist()
-
-                fig_perm = go.Figure(go.Bar(
-                    x=x_imp,
-                    y=y_feat,
-                    orientation='h',
-                    marker=dict(
-                        color=x_imp,
-                        colorscale='Teal', # 换个颜色，区分之前的图
-                    ),
-                    text=[f"{val:.2f}" for val in x_imp],
-                    textposition='auto'
-                ))
+                # --- 4. 绘图 (Matplotlib) ---
+                st.markdown("#### Feature Importance Ranking")
                 
-                fig_perm.update_layout(
-                    title="<b>Permutation Feature Importance</b>",
-                    xaxis_title="Average Impact on Prediction (mg/g)",
-                    yaxis_title="Feature",
-                    height=600,
-                    plot_bgcolor='white',
-                    margin=dict(l=20, r=20, t=50, b=20),
-                    font=dict(family="Arial", size=12)
-                )
-                fig_perm.update_xaxes(showgrid=True, gridcolor='#eee')
+                # 设置画布大小，高度根据特征数量自动调整，防止拥挤
+                fig_height = max(6, len(feature_names) * 0.4)
+                fig, ax = plt.subplots(figsize=(10, fig_height))
                 
-                st.plotly_chart(fig_perm, use_container_width=True, theme=None)
+                # 生成颜色渐变 (从浅蓝到深蓝)
+                # Normalize data for colormap
+                norm = plt.Normalize(perm_df['Importance'].min(), perm_df['Importance'].max())
+                colors = plt.cm.Blues(norm(perm_df['Importance']))
                 
-                # --- 5. 结论 ---
-                top_feature = y_feat[-1]
-                st.success(f"💡 结果解读: 当 **{top_feature}** 的数值出错时，预测结果偏差最大。这说明它是模型最依赖的特征。")
+                # 绘制横向条形图
+                bars = ax.barh(perm_df['Feature'], perm_df['Importance'], color=colors, edgecolor='black', linewidth=0.5)
                 
-                # 如果吸附时间还是很低
-                if "Adsorption time" in perm_df['Feature'].iloc[:3].values: # 如果在前3名倒数
-                     st.warning("⚠️ 注意：如果吸附时间依然排名很低，说明在现有的数据范围内，反应基本都已达到平衡，因此时间不再是制约因素。")
+                # 添加数值标签
+                for bar in bars:
+                    width = bar.get_width()
+                    # 在柱子右侧添加文字
+                    ax.text(width * 1.01, bar.get_y() + bar.get_height()/2, 
+                            f' {width:.2f}', 
+                            va='center', ha='left', fontsize=10, color='black')
+                
+                # 美化坐标轴
+                ax.set_xlabel("Average Impact on Qe (mg/g)", fontsize=12, fontweight='bold')
+                ax.set_title("Global Feature Importance (Permutation)", fontsize=14, fontweight='bold', pad=20)
+                ax.grid(axis='x', linestyle='--', alpha=0.5)
+                
+                # 去掉上方和右侧的边框
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                
+                # 自动调整布局防止标签被截断
+                plt.tight_layout()
+                
+                # 显示图片
+                st.pyplot(fig)
+                
+                # --- 5. 结论与下载 ---
+                # 获取最重要的特征 (最后一行)
+                top_feature = perm_df.iloc[-1]['Feature']
+                st.success(f"💡 结果解读: **{top_feature}** 是对模型预测结果影响最大的特征。")
+                
+                # 下载数据
+                csv_imp = perm_df.sort_values(by='Importance', ascending=False).to_csv(index=False).encode('utf-8')
+                st.download_button("📥 Download Importance Data (CSV)", csv_imp, "permutation_importance.csv", "text/csv")
 
             except Exception as e:
-                st.error(f"Error: {str(e)}")
-                import traceback
-                st.text(traceback.format_exc())
+                st.error(f"Calculation Error: {str(e)}")
         
         st.markdown('</div>', unsafe_allow_html=True)
