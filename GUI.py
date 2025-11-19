@@ -164,7 +164,7 @@ if model:
                 shap_df["Abs"] = shap_df["SHAP Value"].abs()
                 st.dataframe(shap_df.sort_values("Abs", ascending=False).drop("Abs", axis=1), height=400)
 
-# ======================= TAB 2: 灵敏度分析 (终极诊断与修复版) =======================
+# ======================= TAB 2: 灵敏度分析 (终极修复+双重保险版) =======================
     with tab2:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 📈 Single Feature Sensitivity Analysis")
@@ -175,13 +175,9 @@ if model:
         with col_sel2:
             points = st.slider("Resolution", 10, 100, 40, key="sa_resolution_slider")
 
-        # 使用一个占位符，确保 Plotly 有独立的渲染区域
-        plot_placeholder = st.empty() 
-
-        # 尝试使用st.button，如果还是不行，再考虑去掉
         if st.button("Run Sensitivity Analysis", type="primary", key="sa_run_button"):
             try:
-                # --- 1. 准备输入数据 ---
+                # --- 1. 数据准备 ---
                 base_input_dict = {}
                 for idx, name in enumerate(feature_names):
                     base_input_dict[name] = st.session_state.get(f"input_{idx}", feature_ranges[name]["default"])
@@ -196,52 +192,56 @@ if model:
 
                 # --- 2. 预测 ---
                 y_pred = model.predict(temp_df)
-                y_pred = y_pred.ravel() 
                 
-                # --- 3. 数据诊断 (同前) ---
-                if np.isnan(y_pred).any():
-                    plot_placeholder.error("⚠️ 错误：模型预测结果包含无效值 (NaN)。请检查输入特征范围是否合理。")
-                    plot_placeholder.write("前5个预测值:", y_pred[:5])
-                else:
-                    # --- 4. 构建 Plotly 图表 (使用 graph_objects) ---
-                    # 替换之前的 px.line 为 go.Figure + go.Scatter
-                    fig = go.Figure(
-                        data=[go.Scatter(
-                            x=x_values, 
-                            y=y_pred, 
-                            mode='lines+markers', # 确保有线和点
-                            name='Predicted Qe',
-                            line=dict(color='#3498db', width=3), # 强制颜色
-                            marker=dict(size=6, color='#3498db', line=dict(width=1, color='DarkSlateGrey'))
-                        )]
-                    )
-                    
-                    # 极致简化布局
-                    fig.update_layout(
-                        title=f"Sensitivity: {target_feature}",
-                        xaxis_title=target_feature,
-                        yaxis_title="Predicted Qe (mg/g)",
-                        height=450,
-                        margin=dict(l=20, r=20, t=40, b=20),
-                        plot_bgcolor='white', # 明确背景色
-                        hovermode="x unified"
-                    )
-                    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='#eee')
-                    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='#eee')
+                # 【关键修复 1】强制转换为 Python 原生 list，避开 Numpy 序列化坑
+                x_list = x_values.tolist()
+                y_list = y_pred.ravel().tolist()
 
-                    # --- 5. 显示图表 ---
-                    with plot_placeholder.container(): # 在占位符中渲染
-                        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False}) # 移除工具栏，更简洁
-                    
-                    # --- 6. 打印数据预览 (Debug) ---
-                    with st.expander("查看底层数据 (Debug Data)", expanded=False):
-                        st.write(f"正在绘制 {target_feature} 的曲线，数据前5行：")
-                        # 确保显示 DataFrame，更易读
-                        st.dataframe(pd.DataFrame({target_feature: x_values, "Predicted Qe": y_pred}).head())
+                # --- 3. 方案 A: Plotly (交互式) ---
+                st.subheader("Interactive Plot (Plotly)")
+                
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=x_list, 
+                    y=y_list, 
+                    mode='lines+markers',
+                    name='Predicted Qe',
+                    line=dict(color='red', width=4),  # 用红色，对比度最强
+                    marker=dict(size=8, color='red')
+                ))
+                
+                fig.update_layout(
+                    title=f"Sensitivity: {target_feature}",
+                    xaxis_title=target_feature,
+                    yaxis_title="Predicted Qe (mg/g)",
+                    height=450,
+                    plot_bgcolor='#f0f0f0', # 灰色背景，确保白线也能看见
+                    paper_bgcolor='white'
+                )
+                
+                # 【关键修复 2】theme=None，禁止 Streamlit 覆盖颜色设置
+                st.plotly_chart(fig, use_container_width=True, theme=None)
+
+                # --- 4. 方案 B: Matplotlib (静态图备份) ---
+                # 如果 Plotly 还是不显示，这个图绝对会显示，因为它是图片
+                st.subheader("Static Plot (Matplotlib Backup)")
+                
+                fig_mpl, ax = plt.subplots(figsize=(8, 4))
+                ax.plot(x_values, y_pred, color='blue', linewidth=2, marker='o', markersize=4)
+                ax.set_title(f"Effect of {target_feature}")
+                ax.set_xlabel(target_feature)
+                ax.set_ylabel("Predicted Qe (mg/g)")
+                ax.grid(True, linestyle='--', alpha=0.7)
+                
+                st.pyplot(fig_mpl)
+
+                # --- Debug 数据 ---
+                with st.expander("查看底层数据验证"):
+                    st.write("X (前5):", x_list[:5])
+                    st.write("Y (前5):", y_list[:5])
 
             except Exception as e:
-                plot_placeholder.error(f"运行出错: {str(e)}")
-                plot_placeholder.write("详情:", e)
+                st.error(f"运行出错: {str(e)}")
         
         st.markdown('</div>', unsafe_allow_html=True)
 
