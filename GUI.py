@@ -519,9 +519,6 @@ if model:
         
         st.markdown('</div>', unsafe_allow_html=True)
 
-# 定义 tabs 时增加一项
-    # tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["...", "...", "...", "...", "...", "📊 Global Importance"])
-
     # ======================= TAB 6: 全局特征重要性 (新功能) =======================
     with tab6:
         st.markdown('<div class="card">', unsafe_allow_html=True)
