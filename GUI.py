@@ -401,12 +401,12 @@ if model:
     with tab5:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 🎯 Inverse Optimization (Target Search)")
-        st.info("设定你想要的目标吸附量，AI 将帮你寻找能达到该目标的最佳实验条件组合。")
+        st.info("Set the target adsorption amount you want, Model will help you find the optimal combination of experimental conditions that can achieve this goal.")
 
         col_opt1, col_opt2 = st.columns([1, 2])
         
         with col_opt1:
-            target_qe = st.number_input("Target Qe (mg/g)", min_value=0.0, value=100.0, step=10.0)
+            target_qe = st.number_input("Target Qe (mg/g)", min_value=0.0, value=90.0, step=10.0)
             n_iter = st.slider("Search Iterations (Monte Carlo)", 1000, 50000, 10000)
 
         with col_opt2:
