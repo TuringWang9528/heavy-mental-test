@@ -164,84 +164,88 @@ if model:
                 shap_df["Abs"] = shap_df["SHAP Value"].abs()
                 st.dataframe(shap_df.sort_values("Abs", ascending=False).drop("Abs", axis=1), height=400)
 
-# ======================= TAB 2: 灵敏度分析 (终极修复+双重保险版) =======================
+# ======================= TAB 2: 灵敏度分析 (最终完善版) =======================
     with tab2:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 📈 Single Feature Sensitivity Analysis")
         
-        col_sel1, col_sel2 = st.columns([2, 1])
-        with col_sel1:
-            target_feature = st.selectbox("Select Feature", feature_names, key="sa_feature_select")
-        with col_sel2:
-            points = st.slider("Resolution", 10, 100, 40, key="sa_resolution_slider")
+        # 1. 选择分析的特征
+        target_feature = st.selectbox("Select Feature to Analyze", feature_names, key="sa_feature_select")
 
-        if st.button("Run Sensitivity Analysis", type="primary", key="sa_run_button"):
+        # 2. 动态获取该特征的默认范围 (从你的配置字典中)
+        default_min = feature_ranges[target_feature]["min"]
+        default_max = feature_ranges[target_feature]["max"]
+        
+        # 3. 创建范围选择器 (关键修改：使用 number_input 让用户可以精确控制范围)
+        st.write(f"**Set Analysis Range for {target_feature}:**")
+        col_range1, col_range2 = st.columns(2)
+        
+        # 注意：这里 key 加上 target_feature 是为了让切换特征时，输入框数值能自动刷新
+        analysis_min = col_range1.number_input("Min Value", value=float(default_min), format="%.3f", key=f"min_{target_feature}")
+        analysis_max = col_range2.number_input("Max Value", value=float(default_max), format="%.3f", key=f"max_{target_feature}")
+
+        # 4. 分辨率设置 (折叠起来，防止误解)
+        with st.expander("⚙️ Advanced Settings (Resolution)"):
+            points = st.slider("Curve Smoothness (Points)", 10, 200, 50, help="Higher values make the curve smoother but take slightly longer to calculate.")
+
+        # 5. 运行分析按钮
+        if st.button("Run Analysis", type="primary", key="sa_run_button"):
             try:
-                # --- 1. 数据准备 ---
+                # --- A. 准备基准数据 ---
                 base_input_dict = {}
                 for idx, name in enumerate(feature_names):
+                    # 获取 Tab 1 的输入值作为基准
                     base_input_dict[name] = st.session_state.get(f"input_{idx}", feature_ranges[name]["default"])
                 
+                # 扩展为 DataFrame
                 temp_df = pd.DataFrame([base_input_dict] * points)
-                temp_df = temp_df[feature_names]
+                temp_df = temp_df[feature_names] # 确保列顺序正确
 
-                min_val = feature_ranges[target_feature]["min"]
-                max_val = feature_ranges[target_feature]["max"]
-                x_values = np.linspace(min_val, max_val, points)
+                # --- B. 生成 X 轴数据 (使用用户刚刚设置的 Min/Max) ---
+                if analysis_min >= analysis_max:
+                    st.error("Error: Min Value must be smaller than Max Value.")
+                    st.stop()
+                    
+                x_values = np.linspace(analysis_min, analysis_max, points)
                 temp_df[target_feature] = x_values
 
-                # --- 2. 预测 ---
+                # --- C. 预测 ---
                 y_pred = model.predict(temp_df)
                 
-                # 【关键修复 1】强制转换为 Python 原生 list，避开 Numpy 序列化坑
+                # 格式转换 (防报错)
                 x_list = x_values.tolist()
                 y_list = y_pred.ravel().tolist()
 
-                # --- 3. 方案 A: Plotly (交互式) ---
-                st.subheader("Interactive Plot (Plotly)")
-                
+                # --- D. 绘图 (Plotly) ---
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(
                     x=x_list, 
                     y=y_list, 
                     mode='lines+markers',
                     name='Predicted Qe',
-                    line=dict(color='red', width=4),  # 用红色，对比度最强
-                    marker=dict(size=8, color='red')
+                    line=dict(color='#3498db', width=4), # 蓝色线条
+                    marker=dict(size=6, color='#2980b9', line=dict(width=1, color='white')),
+                    hovertemplate=f'{target_feature}: %{{x:.2f}}<br>Qe: %{{y:.2f}} mg/g<extra></extra>' # 自定义悬停提示
                 ))
                 
+                # 布局优化
                 fig.update_layout(
-                    title=f"Sensitivity: {target_feature}",
-                    xaxis_title=target_feature,
+                    title=f"Effect of <b>{target_feature}</b> on Adsorption Capacity",
+                    xaxis_title=f"{target_feature} Value",
                     yaxis_title="Predicted Qe (mg/g)",
-                    height=450,
-                    plot_bgcolor='#f0f0f0', # 灰色背景，确保白线也能看见
-                    paper_bgcolor='white'
+                    height=500,
+                    plot_bgcolor='white',
+                    hovermode="x unified",
+                    font=dict(family="Arial", size=12),
+                    xaxis=dict(showgrid=True, gridcolor='#f0f0f0'),
+                    yaxis=dict(showgrid=True, gridcolor='#f0f0f0')
                 )
                 
-                # 【关键修复 2】theme=None，禁止 Streamlit 覆盖颜色设置
+                # 关键：保留 theme=None 确保颜色正确
                 st.plotly_chart(fig, use_container_width=True, theme=None)
 
-                # --- 4. 方案 B: Matplotlib (静态图备份) ---
-                # 如果 Plotly 还是不显示，这个图绝对会显示，因为它是图片
-                st.subheader("Static Plot (Matplotlib Backup)")
-                
-                fig_mpl, ax = plt.subplots(figsize=(8, 4))
-                ax.plot(x_values, y_pred, color='blue', linewidth=2, marker='o', markersize=4)
-                ax.set_title(f"Effect of {target_feature}")
-                ax.set_xlabel(target_feature)
-                ax.set_ylabel("Predicted Qe (mg/g)")
-                ax.grid(True, linestyle='--', alpha=0.7)
-                
-                st.pyplot(fig_mpl)
-
-                # --- Debug 数据 ---
-                with st.expander("查看底层数据验证"):
-                    st.write("X (前5):", x_list[:5])
-                    st.write("Y (前5):", y_list[:5])
-
             except Exception as e:
-                st.error(f"运行出错: {str(e)}")
+                st.error(f"Analysis Error: {str(e)}")
         
         st.markdown('</div>', unsafe_allow_html=True)
 
