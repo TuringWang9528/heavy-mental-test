@@ -297,7 +297,7 @@ if model:
                 st.error(f"Error processing file: {e}")
         st.markdown('</div>', unsafe_allow_html=True)
         
-# ======================= TAB 4: 双变量交互热力图 (修复与双重保险版) =======================
+# ======================= TAB 4: 双变量交互热力图 (纯净版) =======================
     with tab4:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 🧊 2D Feature Interaction Analysis")
@@ -340,59 +340,38 @@ if model:
                 Z_pred = model.predict(batch_df)
                 Z_grid = Z_pred.reshape(res_inter, res_inter)
 
-                # --- 3. 诊断：检查数据差异性 ---
+                # --- 3. 诊断：检查数据是否有变化 ---
                 z_min, z_max = np.min(Z_grid), np.max(Z_grid)
                 if z_min == z_max:
-                    st.warning(f"⚠️ 警告：在选定的范围内，预测结果没有任何变化 (Constant Value: {z_min:.4f})。热力图将显示为单一颜色。")
+                    st.warning(f"⚠️ 警告：在选定的范围内，吸附量没有变化 (恒定值: {z_min:.4f})。热力图将显示为单一颜色。")
 
-                # --- 4. 方案 A: Plotly Contour (交互式) ---
-                st.subheader("Interactive Contour Plot")
-                
+                # --- 4. 绘制 Plotly Contour (交互式) ---
                 # 强制转为 list，防止序列化问题
                 fig_contour = go.Figure(data=go.Contour(
                     z=Z_grid.tolist(),
                     x=x_linspace.tolist(),
                     y=y_linspace.tolist(),
                     colorscale='Viridis',
-                    # 移除手动 contours 设置，让 Plotly 自动处理，防止除以0错误
                     colorbar=dict(title='Qe (mg/g)'),
-                    contours=dict(coloring='heatmap', showlabels=True) # 混合模式，更稳健
+                    contours=dict(coloring='heatmap', showlabels=True) 
                 ))
 
                 fig_contour.update_layout(
                     title=f"Interaction: {feat_x} vs {feat_y}",
                     xaxis_title=feat_x,
                     yaxis_title=feat_y,
-                    height=550,
+                    height=600,
                     plot_bgcolor='white'
                 )
                 
                 st.plotly_chart(fig_contour, use_container_width=True, theme=None)
 
-                # --- 5. 方案 B: Matplotlib Heatmap (静态图备份) ---
-                # 如果上面不显示，这个作为保底
-                st.subheader("Static Heatmap (Matplotlib Backup)")
-                fig_mpl, ax = plt.subplots(figsize=(8, 6))
-                
-                # 使用 contourf 填充颜色
-                cp = ax.contourf(X_grid, Y_grid, Z_grid, cmap='viridis', levels=20)
-                fig_mpl.colorbar(cp, label='Predicted Qe (mg/g)')
-                
-                ax.set_title(f"Interaction: {feat_x} vs {feat_y}")
-                ax.set_xlabel(feat_x)
-                ax.set_ylabel(feat_y)
-                
-                st.pyplot(fig_mpl)
-
-                # 显示极值点
+                # 显示极值点结论
                 max_idx = np.argmax(Z_pred)
                 st.success(f"Analysis Result: Max Qe ({Z_pred[max_idx]:.2f}) found at {feat_x}={X_flat[max_idx]:.2f}, {feat_y}={Y_flat[max_idx]:.2f}")
 
             except Exception as e:
                 st.error(f"Calculation Error: {str(e)}")
-                # 打印详细错误以便调试
-                import traceback
-                st.text(traceback.format_exc())
         
         st.markdown('</div>', unsafe_allow_html=True)
 
