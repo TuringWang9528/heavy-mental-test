@@ -523,7 +523,7 @@ if model:
     with tab6:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown("### 📊 Global Feature Importance Analysis")
-        st.info("Which features contribute most to the model's decisions overall?")
+        st.info("Feature importance is used to quantify the contribution of each input variable to the model's prediction results, thereby identifying key influencing factors and providing a basis for model optimization and process regulation.")
         
         if st.button("Calculate Importance", type="primary"):
             try:
