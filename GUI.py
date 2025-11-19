@@ -62,7 +62,7 @@ feature_names = list(feature_ranges.keys())
 if model:
     # 使用 Tabs 分隔功能，使界面更清晰
     # 修改这行代码
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🧪 Single Prediction", "📈 Sensitivity Analysis", "📂 Batch Prediction", "🧊 Interaction Analysis", "🎯 Inverse Optimization"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🧪 Single Prediction", "📈 Sensitivity Analysis", "📂 Batch Prediction", "🧊 Interaction Analysis", "🎯 Inverse Optimization", "📊 Global Importance"])
 
     # ======================= TAB 1: 单次预测 (原有功能增强) =======================
     with tab1:
@@ -297,27 +297,30 @@ if model:
                 st.error(f"Error processing file: {e}")
         st.markdown('</div>', unsafe_allow_html=True)
         
-# ======================= TAB 4: 双变量交互热力图 (纯净版) =======================
+# ======================= TAB 4: 交互分析 (2D/3D 双模式版) =======================
     with tab4:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown("### 🧊 2D Feature Interaction Analysis")
+        st.markdown("### 🧊 Interaction Analysis (2D & 3D)")
         
-        col_inter1, col_inter2 = st.columns(2)
+        # 1. 布局：左侧选参数，右侧选模式
+        col_inter1, col_inter2, col_inter3 = st.columns([1, 1, 1])
         with col_inter1:
-            feat_x = st.selectbox("Select X-axis Feature", feature_names, index=0, key="inter_x")
+            feat_x = st.selectbox("X-axis Feature", feature_names, index=0, key="inter_x")
         with col_inter2:
-            # 默认选第2个特征
-            feat_y = st.selectbox("Select Y-axis Feature", feature_names, index=1, key="inter_y")
+            feat_y = st.selectbox("Y-axis Feature", feature_names, index=1, key="inter_y")
+        with col_inter3:
+            # 切换 2D / 3D
+            view_mode = st.radio("View Mode", ["2D Heatmap", "3D Surface"], horizontal=True)
 
-        res_inter = st.slider("Resolution", 10, 50, 20, key="inter_res")
+        res_inter = st.slider("Resolution (Grid Size)", 10, 50, 25, key="inter_res")
 
-        if st.button("Generate Heatmap", type="primary", key="inter_btn"):
+        if st.button("Generate Plot", type="primary", key="inter_btn"):
             try:
                 if feat_x == feat_y:
                     st.warning("⚠️ Please select two different features.")
                     st.stop()
 
-                # --- 1. 数据准备 ---
+                # --- 数据准备 (同前) ---
                 base_input_dict = {}
                 for idx, name in enumerate(feature_names):
                     base_input_dict[name] = st.session_state.get(f"input_{idx}", feature_ranges[name]["default"])
@@ -336,42 +339,61 @@ if model:
                 batch_df[feat_x] = X_flat
                 batch_df[feat_y] = Y_flat
                 
-                # --- 2. 预测 ---
                 Z_pred = model.predict(batch_df)
                 Z_grid = Z_pred.reshape(res_inter, res_inter)
-
-                # --- 3. 诊断：检查数据是否有变化 ---
-                z_min, z_max = np.min(Z_grid), np.max(Z_grid)
-                if z_min == z_max:
-                    st.warning(f"⚠️ 警告：在选定的范围内，吸附量没有变化 (恒定值: {z_min:.4f})。热力图将显示为单一颜色。")
-
-                # --- 4. 绘制 Plotly Contour (交互式) ---
-                # 强制转为 list，防止序列化问题
-                fig_contour = go.Figure(data=go.Contour(
-                    z=Z_grid.tolist(),
-                    x=x_linspace.tolist(),
-                    y=y_linspace.tolist(),
-                    colorscale='Viridis',
-                    colorbar=dict(title='Qe (mg/g)'),
-                    contours=dict(coloring='heatmap', showlabels=True) 
-                ))
-
-                fig_contour.update_layout(
-                    title=f"Interaction: {feat_x} vs {feat_y}",
-                    xaxis_title=feat_x,
-                    yaxis_title=feat_y,
-                    height=600,
-                    plot_bgcolor='white'
-                )
                 
-                st.plotly_chart(fig_contour, use_container_width=True, theme=None)
+                # 诊断
+                if np.min(Z_grid) == np.max(Z_grid):
+                    st.warning("⚠️ Prediction is constant in this range.")
 
-                # 显示极值点结论
+                # --- 绘图逻辑 ---
+                if view_mode == "2D Heatmap":
+                    # 2D 模式 (保持原样)
+                    fig = go.Figure(data=go.Contour(
+                        z=Z_grid.tolist(),
+                        x=x_linspace.tolist(),
+                        y=y_linspace.tolist(),
+                        colorscale='Viridis',
+                        colorbar=dict(title='Qe'),
+                        contours=dict(coloring='heatmap', showlabels=True)
+                    ))
+                    fig.update_layout(height=600, title=f"2D Interaction: {feat_x} vs {feat_y}")
+
+                else:
+                    # 3D 模式 (新增)
+                    fig = go.Figure(data=[go.Surface(
+                        z=Z_grid.tolist(),
+                        x=x_linspace.tolist(),
+                        y=y_linspace.tolist(),
+                        colorscale='Viridis',
+                        colorbar=dict(title='Qe'),
+                        opacity=0.9
+                    )])
+                    
+                    fig.update_layout(
+                        title=f"3D Surface: {feat_x} vs {feat_y}",
+                        scene=dict(
+                            xaxis_title=feat_x,
+                            yaxis_title=feat_y,
+                            zaxis_title="Qe (mg/g)",
+                            xaxis=dict(backgroundcolor="white", gridcolor="lightgrey"),
+                            yaxis=dict(backgroundcolor="white", gridcolor="lightgrey"),
+                            zaxis=dict(backgroundcolor="white", gridcolor="lightgrey"),
+                        ),
+                        height=700, # 3D 图稍微高一点
+                        margin=dict(l=0, r=0, b=0, t=40) # 减少边距
+                    )
+
+                # 通用配置
+                fig.update_layout(plot_bgcolor='white')
+                st.plotly_chart(fig, use_container_width=True, theme=None)
+                
+                # 结论
                 max_idx = np.argmax(Z_pred)
-                st.success(f"Analysis Result: Max Qe ({Z_pred[max_idx]:.2f}) found at {feat_x}={X_flat[max_idx]:.2f}, {feat_y}={Y_flat[max_idx]:.2f}")
+                st.success(f"Max Qe ({Z_pred[max_idx]:.2f}) at {feat_x}={X_flat[max_idx]:.2f}, {feat_y}={Y_flat[max_idx]:.2f}")
 
             except Exception as e:
-                st.error(f"Calculation Error: {str(e)}")
+                st.error(f"Error: {str(e)}")
         
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -494,5 +516,72 @@ if model:
 
             except Exception as e:
                 st.error(f"Optimization Error: {str(e)}")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# 定义 tabs 时增加一项
+    # tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["...", "...", "...", "...", "...", "📊 Global Importance"])
+
+    # ======================= TAB 6: 全局特征重要性 (新功能) =======================
+    with tab6:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown("### 📊 Global Feature Importance Analysis")
+        st.info("Which features contribute most to the model's decisions overall?")
+        
+        if st.button("Calculate Importance", type="primary"):
+            try:
+                # 1. 获取 XGBoost 内置的重要性
+                # 这里的 importance_type 默认通常是 'weight' 或 'gain'
+                # 我们提取 'gain' (增益)，因为它在科研中通常被认为更准确
+                importance_dict = model.get_booster().get_score(importance_type='gain')
+                
+                # 2. 整理数据
+                # XGBoost 返回的 key 可能是 'f0', 'f1' 也可能是列名
+                # 为了安全，我们直接用 sklearn 接口的 feature_importances_ (基于 gain/gini)
+                importances = model.feature_importances_
+                
+                # 构建 DataFrame
+                imp_df = pd.DataFrame({
+                    'Feature': feature_names,
+                    'Importance': importances
+                })
+                
+                # 排序
+                imp_df = imp_df.sort_values(by='Importance', ascending=True) # 升序用于画横向条形图
+                
+                # 3. 绘图 (横向条形图)
+                fig_imp = go.Figure(go.Bar(
+                    x=imp_df['Importance'].tolist(),
+                    y=imp_df['Feature'].tolist(),
+                    orientation='h', # 横向
+                    marker=dict(
+                        color=imp_df['Importance'].tolist(),
+                        colorscale='Blues', # 颜色随重要性变深
+                    )
+                ))
+                
+                fig_imp.update_layout(
+                    title="Feature Importance Ranking (XGBoost)",
+                    xaxis_title="Relative Importance (Gain)",
+                    yaxis_title="Feature",
+                    height=600,
+                    plot_bgcolor='white',
+                    margin=dict(l=150) # 给左边留足空间显示特征名
+                )
+                fig_imp.update_xaxes(showgrid=True, gridcolor='#eee')
+                
+                st.plotly_chart(fig_imp, use_container_width=True, theme=None)
+                
+                # 4. 文字解读
+                top_3 = imp_df.sort_values(by='Importance', ascending=False).head(3)['Feature'].tolist()
+                st.success(f"💡 **Insight:** The top 3 most critical factors affecting Adsorption Capacity are: **{', '.join(top_3)}**.")
+                
+                # 5. 数据下载
+                csv_imp = imp_df.sort_values(by='Importance', ascending=False).to_csv(index=False).encode('utf-8')
+                st.download_button("📥 Download Importance Data", csv_imp, "feature_importance.csv", "text/csv")
+
+            except Exception as e:
+                st.error(f"Error calculating importance: {str(e)}")
+                st.write("Tip: Ensure the model is a standard XGBoost Regressor.")
         
         st.markdown('</div>', unsafe_allow_html=True)
