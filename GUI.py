@@ -519,66 +519,109 @@ if model:
         
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # ======================= TAB 6: 全局特征重要性 (新功能) =======================
+    # ======================= TAB 6: 置换特征重要性 (更能反映真实影响) =======================
     with tab6:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown("### 📊 Global Feature Importance Analysis")
-        st.info("Feature importance is used to quantify the contribution of each input variable to the model's prediction results, thereby identifying key influencing factors and providing a basis for model optimization and process regulation.")
+        st.markdown("### 📊 Permutation Feature Importance")
+        st.info("Shuffle the data of a certain feature and observe how much the prediction results change. The greater the change, the more important the feature is.")
         
-        if st.button("Calculate Importance", type="primary"):
+        n_samples = st.slider("Simulation Samples", 500, 5000, 1000, help="样本越多，计算结果越稳定")
+
+        if st.button("Calculate Permutation Importance", type="primary", key="perm_imp_btn"):
+            progress_bar = st.progress(0)
+            
             try:
-                # 1. 获取 XGBoost 内置的重要性
-                # 这里的 importance_type 默认通常是 'weight' 或 'gain'
-                # 我们提取 'gain' (增益)，因为它在科研中通常被认为更准确
-                importance_dict = model.get_booster().get_score(importance_type='gain')
+                # --- 1. 生成虚拟的基准数据集 ---
+                # 因为我们没有原始训练数据，这里生成一批覆盖全范围的样本来模拟
+                base_data = {}
+                for name in feature_names:
+                    min_v = feature_ranges[name]["min"]
+                    max_v = feature_ranges[name]["max"]
+                    base_data[name] = np.random.uniform(min_v, max_v, n_samples)
                 
-                # 2. 整理数据
-                # XGBoost 返回的 key 可能是 'f0', 'f1' 也可能是列名
-                # 为了安全，我们直接用 sklearn 接口的 feature_importances_ (基于 gain/gini)
-                importances = model.feature_importances_
+                X_base = pd.DataFrame(base_data)[feature_names]
                 
-                # 构建 DataFrame
-                imp_df = pd.DataFrame({
+                # 基准预测
+                y_base = model.predict(X_base)
+                
+                progress_bar.progress(20)
+                
+                # --- 2. 计算置换重要性 ---
+                importances = []
+                
+                for i, col in enumerate(feature_names):
+                    # 复制一份数据
+                    X_shuffled = X_base.copy()
+                    
+                    # 【核心步骤】打乱当前这一列
+                    # 我们把这一列的数据随机重排，破坏它和结果的对应关系
+                    X_shuffled[col] = np.random.permutation(X_shuffled[col].values)
+                    
+                    # 重新预测
+                    y_shuffled = model.predict(X_shuffled)
+                    
+                    # 计算变化量 (使用平均绝对误差 MAE 来衡量影响)
+                    # 意思就是：因为打乱了这个特征，预测结果平均偏离了多少 mg/g
+                    diff = np.mean(np.abs(y_base - y_shuffled))
+                    
+                    importances.append(diff)
+                    
+                    # 更新进度条
+                    prog = 20 + int((i / len(feature_names)) * 80)
+                    progress_bar.progress(prog)
+                
+                progress_bar.progress(100)
+
+                # --- 3. 整理数据 ---
+                perm_df = pd.DataFrame({
                     'Feature': feature_names,
-                    'Importance': importances
+                    'Importance (Impact on Qe)': importances
                 })
                 
                 # 排序
-                imp_df = imp_df.sort_values(by='Importance', ascending=True) # 升序用于画横向条形图
+                perm_df = perm_df.sort_values(by='Importance (Impact on Qe)', ascending=True)
                 
-                # 3. 绘图 (横向条形图)
-                fig_imp = go.Figure(go.Bar(
-                    x=imp_df['Importance'].tolist(),
-                    y=imp_df['Feature'].tolist(),
-                    orientation='h', # 横向
+                # --- 4. 绘图 (Plotly) ---
+                # 转为 list 防止显示问题
+                y_feat = perm_df['Feature'].tolist()
+                x_imp = perm_df['Importance (Impact on Qe)'].tolist()
+
+                fig_perm = go.Figure(go.Bar(
+                    x=x_imp,
+                    y=y_feat,
+                    orientation='h',
                     marker=dict(
-                        color=imp_df['Importance'].tolist(),
-                        colorscale='Blues', # 颜色随重要性变深
-                    )
+                        color=x_imp,
+                        colorscale='Teal', # 换个颜色，区分之前的图
+                    ),
+                    text=[f"{val:.2f}" for val in x_imp],
+                    textposition='auto'
                 ))
                 
-                fig_imp.update_layout(
-                    title="Feature Importance Ranking (XGBoost)",
-                    xaxis_title="Relative Importance (Gain)",
-                    # yaxis_title="Feature",
+                fig_perm.update_layout(
+                    title="<b>Permutation Feature Importance</b>",
+                    xaxis_title="Average Impact on Prediction (mg/g)",
+                    yaxis_title="Feature",
                     height=600,
                     plot_bgcolor='white',
-                    margin=dict(l=150) # 给左边留足空间显示特征名
+                    margin=dict(l=20, r=20, t=50, b=20),
+                    font=dict(family="Arial", size=12)
                 )
-                fig_imp.update_xaxes(showgrid=True, gridcolor='#eee')
+                fig_perm.update_xaxes(showgrid=True, gridcolor='#eee')
                 
-                st.plotly_chart(fig_imp, use_container_width=True, theme=None)
+                st.plotly_chart(fig_perm, use_container_width=True, theme=None)
                 
-                # 4. 文字解读
-                top_3 = imp_df.sort_values(by='Importance', ascending=False).head(3)['Feature'].tolist()
-                st.success(f"💡 **Insight:** The top 3 most critical factors affecting Adsorption Capacity are: **{', '.join(top_3)}**.")
+                # --- 5. 结论 ---
+                top_feature = y_feat[-1]
+                st.success(f"💡 结果解读: 当 **{top_feature}** 的数值出错时，预测结果偏差最大。这说明它是模型最依赖的特征。")
                 
-                # 5. 数据下载
-                csv_imp = imp_df.sort_values(by='Importance', ascending=False).to_csv(index=False).encode('utf-8')
-                st.download_button("📥 Download Importance Data", csv_imp, "feature_importance.csv", "text/csv")
+                # 如果吸附时间还是很低
+                if "Adsorption time" in perm_df['Feature'].iloc[:3].values: # 如果在前3名倒数
+                     st.warning("⚠️ 注意：如果吸附时间依然排名很低，说明在现有的数据范围内，反应基本都已达到平衡，因此时间不再是制约因素。")
 
             except Exception as e:
-                st.error(f"Error calculating importance: {str(e)}")
-                st.write("Tip: Ensure the model is a standard XGBoost Regressor.")
+                st.error(f"Error: {str(e)}")
+                import traceback
+                st.text(traceback.format_exc())
         
         st.markdown('</div>', unsafe_allow_html=True)
