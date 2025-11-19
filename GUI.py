@@ -394,7 +394,7 @@ if model:
             #     import traceback
             #     st.text(traceback.format_exc())
         
-        st.markdown('</div>', unsafe_allow_html=True)
+        # st.markdown('</div>', unsafe_allow_html=True)
 
 # ======================= TAB 5: 逆向优化 (修复显示版) =======================
     with tab5:
