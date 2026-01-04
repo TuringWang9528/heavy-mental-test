@@ -10,6 +10,139 @@ import io
 from dataclasses import dataclass
 import time
 
+class BiocharSACEnv(gym.Env):
+    """
+    用训练好的回归模型 model.predict() 作为环境动力学（surrogate env）。
+    状态：16维特征(归一化0-1)
+    动作：Top-K特征的连续增量（[-1,1]）
+    目标：最大化 Qe
+    """
+    metadata = {"render_modes": []}
+
+    def __init__(
+        self,
+        model,
+        feature_names,
+        feature_ranges,
+        topk_idx,
+        imp_vec,
+        base_step=0.06,
+        lam_change=0.05,
+        lam_edge=0.20,
+        max_steps=25,
+        random_start=True,
+        seed=42,
+    ):
+        super().__init__()
+        self.model = model
+        self.feature_names = feature_names
+        self.ranges = feature_ranges
+        self.topk_idx = np.array(topk_idx, dtype=int)
+        self.imp = np.array(imp_vec, dtype=float)
+        self.base_step = float(base_step)
+        self.lam_change = float(lam_change)
+        self.lam_edge = float(lam_edge)
+        self.max_steps = int(max_steps)
+        self.random_start = bool(random_start)
+        self.rng = np.random.default_rng(int(seed))
+
+        self.n = len(feature_names)
+        self.k = len(topk_idx)
+
+        # SB3 + gymnasium
+        self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(self.n,), dtype=np.float32)
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(self.k,), dtype=np.float32)
+
+        # 重要性加权步长（Top-K）
+        imp_topk = self.imp[self.topk_idx]
+        imp_topk = np.maximum(imp_topk, 1e-12)
+        self.imp_topk = imp_topk / (imp_topk.max() + 1e-12)
+        self.step_vec = self.base_step * (0.3 + 0.7 * self.imp_topk)  # 重要特征更敢动
+
+        self.t = 0
+        self.x = None
+        self.x_start = None
+
+    def _norm(self, x):
+        x01 = np.zeros_like(x, dtype=np.float32)
+        for i, f in enumerate(self.feature_names):
+            mn, mx = float(self.ranges[f]["min"]), float(self.ranges[f]["max"])
+            x01[i] = (x[i] - mn) / (mx - mn + 1e-12)
+        return np.clip(x01, 0.0, 1.0)
+
+    def _denorm(self, x01):
+        x = np.zeros_like(x01, dtype=np.float32)
+        for i, f in enumerate(self.feature_names):
+            mn, mx = float(self.ranges[f]["min"]), float(self.ranges[f]["max"])
+            x[i] = mn + x01[i] * (mx - mn)
+        return x
+
+    @staticmethod
+    def _edge_penalty(x01_topk):
+        # 靠近0或1(5%以内)就算“贴边”
+        return float(np.mean(np.minimum(x01_topk, 1.0 - x01_topk) < 0.05))
+
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
+        self.t = 0
+
+        # 支持从外部指定起点（用于评估：从用户输入出发）
+        x0 = None
+        if options is not None:
+            x0 = options.get("x0", None)
+
+        if x0 is not None:
+            self.x = np.array(x0, dtype=np.float32)
+        else:
+            if self.random_start:
+                x_init = []
+                for f in self.feature_names:
+                    mn, mx = float(self.ranges[f]["min"]), float(self.ranges[f]["max"])
+                    x_init.append(self.rng.uniform(mn, mx))
+                self.x = np.array(x_init, dtype=np.float32)
+            else:
+                # 若不随机但没给 x0，就用默认值
+                self.x = np.array([float(self.ranges[f]["default"]) for f in self.feature_names], dtype=np.float32)
+
+        self.x_start = self.x.copy()
+        obs = self._norm(self.x)
+        return obs, {}
+
+    def step(self, action):
+        self.t += 1
+        action = np.clip(np.array(action, dtype=np.float32), -1.0, 1.0)
+
+        x01 = self._norm(self.x)
+        x01_next = x01.copy()
+
+        # 只更新 Top-K
+        x01_next[self.topk_idx] = np.clip(
+            x01[self.topk_idx] + self.step_vec.astype(np.float32) * action,
+            0.0,
+            1.0,
+        )
+
+        x_next = self._denorm(x01_next)
+        qe = float(self.model.predict(x_next.reshape(1, -1))[0])
+
+        # 变化惩罚（相对起点）
+        start01 = self._norm(self.x_start)
+        delta = x01_next[self.topk_idx] - start01[self.topk_idx]
+        change_pen = float(np.mean(delta**2))
+
+        # 边界惩罚（避免一直冲 min/max）
+        epen = self._edge_penalty(x01_next[self.topk_idx])
+
+        reward = qe - self.lam_change * change_pen - self.lam_edge * epen
+
+        self.x = x_next
+        obs = self._norm(self.x)
+
+        terminated = False
+        truncated = (self.t >= self.max_steps)
+        info = {"qe": qe, "change_pen": change_pen, "edge_pen": epen}
+        return obs, reward, terminated, truncated, info
+
 # ---------------------- 1. 基础配置 ----------------------
 st.set_page_config(page_title="Biochar Adsorption Predictor", layout="wide")
 plt.rcParams["font.family"] = ["Times New Roman", "SimHei"]
@@ -576,13 +709,17 @@ if model:
         
         st.markdown('</div>', unsafe_allow_html=True)
         
-# ======================= TAB 6: RL 优化（最大化Qe + importance自动选Top-K） =======================
+# ======================= TAB: RL Optimization (SAC) =======================
 with tab_rl:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown("### 🤖 RL Optimization (Maximize Qe with Auto Top-K by Importance)")
-    st.write("Use feature importance to automatically choose the most controllable variables, then apply a lightweight RL-style optimizer to maximize predicted Qe.")
+    st.markdown("### 🤖 RL Optimization (SAC) — Maximize Qe with Auto Top-K by Importance")
 
-    # ---------- 1) 获取/计算 Importance ----------
+    if gym is None or SAC is None or DummyVecEnv is None:
+        st.error("SAC dependencies not available. Please install: pip install gymnasium stable-baselines3 torch")
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.stop()
+
+    # ---------- 1) Importance：优先用 Tab5 结果，否则自动算 ----------
     col_rl1, col_rl2, col_rl3 = st.columns([1, 1, 1])
     with col_rl1:
         k_top = st.slider("Top-K Features (auto selected)", 2, min(10, len(feature_names)), 5)
@@ -591,7 +728,6 @@ with tab_rl:
     with col_rl3:
         imp_seed = st.number_input("Random Seed", value=42, step=1)
 
-    # 如果 Tab5 已算过就直接用；否则自动算一遍（缓存）
     perm_df = st.session_state.get("perm_df", None)
     if perm_df is None or not isinstance(perm_df, pd.DataFrame) or len(perm_df) == 0:
         with st.spinner("Computing feature importance (cached)..."):
@@ -601,219 +737,197 @@ with tab_rl:
     topk_features = perm_df["Feature"].head(int(k_top)).tolist()
     topk_idx = [feature_names.index(f) for f in topk_features]
 
-    # importance 向量（按 feature_names 顺序对齐）
     imp_vec = perm_df.set_index("Feature").loc[feature_names]["Importance"].values.astype(float)
-    imp_vec = np.maximum(imp_vec, 1e-9)  # 防止除0
+    imp_vec = np.maximum(imp_vec, 1e-9)
 
     st.info(f"Auto selected Top-{k_top}: **{', '.join(topk_features)}**")
 
-    # ---------- 2) 起点：优先用 Single Prediction 的输入，否则用默认 ----------
+    # ---------- 2) 起点：优先用 Single Prediction 输入，否则用默认 ----------
     base_input = {}
     for idx, name in enumerate(feature_names):
         base_input[name] = st.session_state.get(f"input_{idx}", feature_ranges[name]["default"])
     x0 = np.array([base_input[n] for n in feature_names], dtype=float)
 
-    # ---------- 3) 轻量 RL 优化器：CEM（序列决策式） ----------
-    st.markdown("#### ⚙️ RL-Style Optimizer Settings (CEM Control)")
+    # ---------- 3) SAC 训练参数 ----------
+    st.markdown("#### ⚙️ SAC Settings")
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        horizon = st.slider("Horizon (Steps)", 5, 40, 20)
+        max_steps = st.slider("Episode Length (max_steps)", 10, 60, 25)
     with c2:
-        pop_size = st.slider("Population", 50, 800, 200, step=50)
+        total_steps = st.slider("Training Timesteps", 5_000, 200_000, 50_000, step=5_000)
     with c3:
-        n_iters = st.slider("CEM Iterations", 5, 50, 20)
+        base_step = st.slider("Base Step (normalized)", 0.01, 0.20, 0.06, step=0.01)
     with c4:
-        elite_frac = st.slider("Elite Fraction", 0.05, 0.30, 0.15, step=0.01)
+        lr = st.select_slider("Learning Rate", options=[1e-4, 3e-4, 1e-3], value=3e-4)
 
-    a1, a2, a3 = st.columns(3)
-    with a1:
-        base_step = st.slider("Base Step (in normalized space)", 0.01, 0.20, 0.06, step=0.01)
-    with a2:
+    p1, p2, p3 = st.columns(3)
+    with p1:
         lam_change = st.slider("Change Penalty λ", 0.0, 0.50, 0.05, step=0.01)
-    with a3:
+    with p2:
         lam_edge = st.slider("Edge Penalty β", 0.0, 1.00, 0.20, step=0.05)
+    with p3:
+        gamma = st.slider("Discount γ", 0.80, 0.999, 0.98, step=0.001)
 
-    with st.expander("Advanced: what this is doing", expanded=False):
-        st.write(
-            "- State: 16 features (normalized 0-1)\n"
-            "- Action: only Top-K features, continuous in [-1, 1]\n"
-            "- Transition: x_next = x + step * action (clipped to [0,1])\n"
-            "- Reward: Qe - λ*change_pen - β*edge_pen\n"
-            "- Optimizer: CEM searches for an action *sequence* that maximizes peak Qe along the rollout."
+    adv = st.expander("Advanced SAC Hyperparameters", expanded=False)
+    with adv:
+        buffer_size = st.slider("Replay Buffer Size", 50_000, 500_000, 200_000, step=50_000)
+        batch_size = st.select_slider("Batch Size", options=[128, 256, 512], value=256)
+        tau = st.slider("Target Smoothing τ", 0.001, 0.05, 0.02, step=0.001)
+
+    # ---------- 4) 训练按钮 ----------
+    run_train = st.button("🚀 Train SAC Agent", type="primary", use_container_width=True)
+
+    if run_train:
+        t0 = time.time()
+        status = st.empty()
+        progress = st.progress(0)
+
+        # 训练环境：随机起点（让策略更鲁棒）
+        def make_env():
+            return BiocharSACEnv(
+                model=model,
+                feature_names=feature_names,
+                feature_ranges=feature_ranges,
+                topk_idx=topk_idx,
+                imp_vec=imp_vec,
+                base_step=base_step,
+                lam_change=lam_change,
+                lam_edge=lam_edge,
+                max_steps=max_steps,
+                random_start=True,
+                seed=int(imp_seed),
+            )
+
+        vec_env = DummyVecEnv([make_env])
+
+        agent = SAC(
+            "MlpPolicy",
+            vec_env,
+            verbose=0,
+            learning_rate=float(lr),
+            buffer_size=int(buffer_size),
+            batch_size=int(batch_size),
+            gamma=float(gamma),
+            tau=float(tau),
         )
 
-    # ---------- 4) 辅助：归一化/反归一化 ----------
-    def norm_x(x):
-        x01 = np.zeros_like(x, dtype=float)
-        for i, f in enumerate(feature_names):
-            mn, mx = float(feature_ranges[f]["min"]), float(feature_ranges[f]["max"])
-            x01[i] = (x[i] - mn) / (mx - mn + 1e-12)
-        return np.clip(x01, 0.0, 1.0)
-
-    def denorm_x(x01):
-        x = np.zeros_like(x01, dtype=float)
-        for i, f in enumerate(feature_names):
-            mn, mx = float(feature_ranges[f]["min"]), float(feature_ranges[f]["max"])
-            x[i] = mn + x01[i] * (mx - mn)
-        return x
-
-    # importance 加权步长（Top-K）
-    imp_topk = imp_vec[topk_idx]
-    imp_topk = imp_topk / (imp_topk.max() + 1e-12)
-    step_vec = base_step * (0.3 + 0.7 * imp_topk)  # 重要特征更敢动
-
-    # reward 组件
-    def edge_penalty(x01_topk):
-        # 靠近边界(0或1)的比例（<5%区域）
-        return float(np.mean(np.minimum(x01_topk, 1.0 - x01_topk) < 0.05))
-
-    def rollout_and_score(action_seq, x01_start):
-        """
-        action_seq: shape (H, K), each in [-1,1]
-        返回：best_qe, best_x01, qe_trace, best_step_idx
-        """
-        x01 = x01_start.copy()
-        best_qe = -1e18
-        best_x01 = x01.copy()
-        qe_trace = []
-
-        # 只惩罚 Top-K 的相对起点变化
-        x01_start_topk = x01_start[topk_idx].copy()
-
-        for t in range(action_seq.shape[0]):
-            a = np.clip(action_seq[t], -1.0, 1.0)
-
-            x01_next = x01.copy()
-            x01_next[topk_idx] = np.clip(x01[topk_idx] + step_vec * a, 0.0, 1.0)
-
-            x_next = denorm_x(x01_next)
-            qe = float(model.predict(x_next.reshape(1, -1))[0])
-            qe_trace.append(qe)
-
-            # penalties
-            delta = x01_next[topk_idx] - x01_start_topk
-            change_pen = float(np.mean(delta**2))
-            epen = edge_penalty(x01_next[topk_idx])
-
-            # 即时 reward（这里只做记录；最终 score 用“峰值Qe - penalty”）
-            score = qe - lam_change * change_pen - lam_edge * epen
-
-            if score > best_qe:
-                best_qe = score
-                best_x01 = x01_next.copy()
-                best_step = t
-
-            x01 = x01_next
-
-        return best_qe, best_x01, qe_trace, best_step
-
-    # ---------- 5) 运行按钮 ----------
-    run = st.button("🚀 Run RL Optimization (CEM)", type="primary", use_container_width=True)
-    if run:
-        # CEM 初始化：动作序列分布 N(mean, std)
-        H = int(horizon)
-        K = int(k_top)
-        N = int(pop_size)
-        iters = int(n_iters)
-        elite_n = max(2, int(N * float(elite_frac)))
-
-        x01_start = norm_x(x0)
-
-        mean = np.zeros((H, K), dtype=float)
-        std = np.ones((H, K), dtype=float) * 0.8
-
-        rng = np.random.default_rng(int(imp_seed))
-        progress = st.progress(0)
-        status = st.empty()
-
-        best_global_score = -1e18
-        best_global_x01 = x01_start.copy()
-        best_global_trace = None
-        best_global_step = 0
-
-        t0 = time.time()
-
-        for it in range(iters):
-            status.text(f"CEM iteration {it+1}/{iters} ... sampling {N} rollouts")
-
-            # 采样动作序列（tanh/clip 保证在 [-1,1]）
-            actions = rng.normal(mean, std, size=(N, H, K))
-            actions = np.clip(actions, -1.0, 1.0)
-
-            scores = np.zeros(N, dtype=float)
-            elite_pack = []
-
-            for i in range(N):
-                score, x01_best, trace, best_step = rollout_and_score(actions[i], x01_start)
-                scores[i] = score
-                elite_pack.append((score, actions[i], x01_best, trace, best_step))
-
-            # 选 elite
-            elite_pack.sort(key=lambda x: x[0], reverse=True)
-            elites = elite_pack[:elite_n]
-
-            elite_actions = np.stack([e[1] for e in elites], axis=0)
-            mean = elite_actions.mean(axis=0)
-            std = elite_actions.std(axis=0) + 1e-6
-
-            # 更新全局最优
-            if elites[0][0] > best_global_score:
-                best_global_score = elites[0][0]
-                best_global_x01 = elites[0][2].copy()
-                best_global_trace = elites[0][3]
-                best_global_step = elites[0][4]
-
-            progress.progress(int(((it + 1) / iters) * 100))
+        # 简单的进度显示：分段 learn
+        chunks = 10
+        per = max(1, int(total_steps // chunks))
+        learned = 0
+        for i in range(chunks):
+            status.text(f"Training SAC... {learned}/{total_steps} timesteps")
+            agent.learn(total_timesteps=per, reset_num_timesteps=False, progress_bar=False)
+            learned += per
+            progress.progress(int(((i + 1) / chunks) * 100))
 
         status.empty()
         progress.empty()
 
-        x_best = denorm_x(best_global_x01)
-        qe_best = float(model.predict(x_best.reshape(1, -1))[0])
+        # 把 agent 放到 session_state，避免 rerun 丢失
+        st.session_state["sac_agent"] = agent
+        st.session_state["sac_cfg"] = {
+            "topk_features": topk_features,
+            "topk_idx": topk_idx,
+            "imp_seed": int(imp_seed),
+            "base_step": float(base_step),
+            "lam_change": float(lam_change),
+            "lam_edge": float(lam_edge),
+            "max_steps": int(max_steps),
+        }
 
-        st.success(f"✅ Best predicted Qe: **{qe_best:.4f} mg/g** (found at step {best_global_step+1}/{horizon})")
-        st.caption(f"Optimization finished in {time.time()-t0:.2f}s. (Surrogate environment = your trained model)")
+        st.success(f"✅ SAC training finished in {time.time()-t0:.2f}s")
 
-        # 展示 Top-K 的变化（更直观）
-        res_df = pd.DataFrame({
-            "Feature": feature_names,
-            "Start": x0,
-            "Best": x_best,
-            "Delta": (x_best - x0)
-        })
-        res_df["AbsDelta"] = res_df["Delta"].abs()
-        show_df = res_df.sort_values("AbsDelta", ascending=False).drop(columns=["AbsDelta"])
+    # ---------- 5) 评估/生成最优条件（从用户输入 x0 出发 rollout） ----------
+    agent = st.session_state.get("sac_agent", None)
+    cfg = st.session_state.get("sac_cfg", None)
 
-        st.markdown("#### 🔎 Best Condition (sorted by |Δ|)")
-        st.dataframe(show_df.style.format({"Start": "{:.4f}", "Best": "{:.4f}", "Delta": "{:.4f}"}), height=420)
+    if agent is not None and cfg is not None:
+        st.markdown("#### 🎯 Evaluate from Current Input (Rollout)")
 
-        # 轨迹图（Qe 随 step）
-        if best_global_trace is not None:
-            fig_trace = go.Figure()
-            fig_trace.add_trace(go.Scatter(
-                x=list(range(1, len(best_global_trace)+1)),
-                y=best_global_trace,
-                mode="lines+markers",
-                name="Qe trace"
-            ))
-            fig_trace.update_layout(
-                title="Qe Improvement Along the Rollout",
-                xaxis_title="Step",
-                yaxis_title="Predicted Qe (mg/g)",
-                height=420,
-                plot_bgcolor="white"
+        eval_runs = st.slider("Evaluation Rollouts (pick best)", 1, 30, 5)
+        deterministic = st.checkbox("Deterministic Policy", value=True)
+
+        if st.button("📈 Run Evaluation Rollouts", type="primary", use_container_width=True):
+            env_eval = BiocharSACEnv(
+                model=model,
+                feature_names=feature_names,
+                feature_ranges=feature_ranges,
+                topk_idx=cfg["topk_idx"],
+                imp_vec=imp_vec,
+                base_step=cfg["base_step"],
+                lam_change=cfg["lam_change"],
+                lam_edge=cfg["lam_edge"],
+                max_steps=cfg["max_steps"],
+                random_start=False,
+                seed=int(cfg["imp_seed"]),
             )
-            fig_trace.update_xaxes(showgrid=True, gridcolor="#f0f0f0")
-            fig_trace.update_yaxes(showgrid=True, gridcolor="#f0f0f0")
-            st.plotly_chart(fig_trace, use_container_width=True, theme=None)
 
-        # 导出最佳条件
-        out_df = pd.DataFrame([x_best], columns=feature_names)
-        out_df["Predicted Qe"] = qe_best
-        csv_out = out_df.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download Best Condition (CSV)", csv_out, "rl_best_condition.csv", "text/csv", type="primary")
+            best_qe = -1e18
+            best_x = None
+            best_trace = None
+            best_step = 0
+
+            for r in range(int(eval_runs)):
+                obs, _ = env_eval.reset(options={"x0": x0})
+                trace = []
+                for t in range(cfg["max_steps"]):
+                    action, _ = agent.predict(obs, deterministic=bool(deterministic))
+                    obs, reward, term, trunc, info = env_eval.step(action)
+                    trace.append(info["qe"])
+                    if info["qe"] > best_qe:
+                        best_qe = info["qe"]
+                        best_x = env_eval.x.copy()
+                        best_trace = trace.copy()
+                        best_step = t
+                    if trunc:
+                        break
+
+            st.success(f"✅ Best predicted Qe: **{best_qe:.4f} mg/g** (best step {best_step+1}/{cfg['max_steps']})")
+
+            # 展示参数变化
+            res_df = pd.DataFrame({
+                "Feature": feature_names,
+                "Start": x0,
+                "Best": best_x,
+                "Delta": (best_x - x0)
+            })
+            res_df["AbsDelta"] = res_df["Delta"].abs()
+            show_df = res_df.sort_values("AbsDelta", ascending=False).drop(columns=["AbsDelta"])
+
+            st.markdown("#### 🔎 Best Condition (sorted by |Δ|)")
+            st.dataframe(show_df.style.format({"Start": "{:.4f}", "Best": "{:.4f}", "Delta": "{:.4f}"}), height=420)
+
+            # 轨迹图
+            if best_trace is not None:
+                fig_trace = go.Figure()
+                fig_trace.add_trace(go.Scatter(
+                    x=list(range(1, len(best_trace)+1)),
+                    y=best_trace,
+                    mode="lines+markers",
+                    name="Qe trace"
+                ))
+                fig_trace.update_layout(
+                    title="Qe Improvement Along the Rollout (Best Trajectory)",
+                    xaxis_title="Step",
+                    yaxis_title="Predicted Qe (mg/g)",
+                    height=420,
+                    plot_bgcolor="white"
+                )
+                fig_trace.update_xaxes(showgrid=True, gridcolor="#f0f0f0")
+                fig_trace.update_yaxes(showgrid=True, gridcolor="#f0f0f0")
+                st.plotly_chart(fig_trace, use_container_width=True, theme=None)
+
+            # 导出最佳条件
+            out_df = pd.DataFrame([best_x], columns=feature_names)
+            out_df["Predicted Qe"] = best_qe
+            csv_out = out_df.to_csv(index=False).encode("utf-8")
+            st.download_button("📥 Download Best Condition (CSV)", csv_out, "sac_best_condition.csv", "text/csv", type="primary")
+    else:
+        st.warning("Train the SAC agent first, then evaluate rollouts to get the best condition.")
 
     st.markdown("</div>", unsafe_allow_html=True)
+
 
     # ======================= TAB 6: [新功能] 对比分析 =======================
     with tab_compare:
